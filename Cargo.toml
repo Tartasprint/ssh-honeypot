@@ -1,0 +1,16 @@
+[package]
+name = "ssh-honeypot"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.86"
+async-trait = "0.1.80"
+env_logger = "0.11.3"
+log = "0.4.21"
+portable-pty = "0.8.1"
+russh = { version = "0.43.0", features = ["openssl"]}
+russh-keys = { version = "0.43.0", features = ["openssl"]}
+tokio = "1.38.0"
