@@ -41,12 +41,19 @@ struct Server {
     counter: u64,
 }
 
+const MAX_ATTEMPTS: u64 = 5;
+
 struct Handler {
     connection: u64,
+    attempts: u64,
     peer_address: Option<std::net::SocketAddr>,
 }
 
 impl Handler {
+    fn new_attempt(&mut self){
+        self.attempts += 1;
+    }
+
     fn log(&self, data: log::RecordKind) {
         (log::Record {
             time: Utc::now(),
@@ -56,11 +63,15 @@ impl Handler {
         }).log();
     }
 
-    fn available_methods(&self) -> MethodSet {
-        let mut s = MethodSet::empty();
-        s.push(MethodKind::Password);
-        s.push(MethodKind::PublicKey);
-        s
+    fn available_methods(&self) -> server::Auth {
+        if self.attempts <= MAX_ATTEMPTS {
+            let mut methods = MethodSet::empty();
+            methods.push(MethodKind::Password);
+            methods.push(MethodKind::PublicKey);
+            server::Auth::Reject { proceed_with_methods: Some(methods), partial_success: false }
+        } else {
+            server::Auth::Reject { proceed_with_methods: None, partial_success: false }
+        }
     }
 }
 
@@ -75,6 +86,7 @@ impl server::Server for Server {
     fn new_client(&mut self, peer_address: Option<std::net::SocketAddr>) -> Self::Handler {
         let r = Handler {
             connection: self.counter,
+            attempts: 0,
             peer_address,
         };
         r.log(log::RecordKind::StartConnection);
@@ -87,10 +99,11 @@ impl server::Handler for Handler {
     type Error = anyhow::Error;
 
     async fn auth_none(&mut self, user: &str) -> Result<server::Auth, Self::Error> {
+        self.new_attempt();
         self.log(log::RecordKind::AuthNone{
             user: user.into(),
         });
-        Ok(server::Auth::Reject { proceed_with_methods: Some(self.available_methods()), partial_success: false })
+        Ok(self.available_methods())
     }
 
     async fn auth_publickey(
@@ -98,18 +111,20 @@ impl server::Handler for Handler {
         user: &str,
         key: &ssh_key::PublicKey,
     ) -> Result<server::Auth, Self::Error> {
+        self.new_attempt();
         self.log(log::RecordKind::PublicKey{
             user: user.into(),
             key: key.into(),
         });
-        Ok(server::Auth::Reject { proceed_with_methods: Some(self.available_methods()), partial_success: false })
+        Ok(self.available_methods())
     }
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<server::Auth, Self::Error> {
+        self.new_attempt();
         self.log(log::RecordKind::Password{
             user: user.into(),
             password: password.into(),
         });
-        Ok(server::Auth::Reject { proceed_with_methods: Some(self.available_methods()), partial_success: false })
+        Ok(self.available_methods())
     }
 }
