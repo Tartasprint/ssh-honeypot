@@ -1,126 +1,89 @@
-use std::collections::HashMap;
-use std::io::Write;
 use std::sync::Arc;
 
-use async_trait::async_trait;
+use chrono::prelude::*;
+use russh::keys::ssh_key::rand_core::OsRng;
+use russh::keys::{Certificate, *};
 use russh::server::{Msg, Server as _, Session};
 use russh::*;
-use russh_keys::*;
+use tokio::net::TcpListener;
 use tokio::sync::Mutex;
-
 
 #[tokio::main]
 async fn main() {
-    // env_logger::builder()
-    //    .filter_level(log::LevelFilter::Debug)
-    //    .init();
-
     let config = russh::server::Config {
         inactivity_timeout: Some(std::time::Duration::from_secs(3600)),
         auth_rejection_time: std::time::Duration::from_secs(3),
         auth_rejection_time_initial: Some(std::time::Duration::from_secs(0)),
-        keys: vec![russh_keys::key::KeyPair::generate_ed25519().unwrap()],
+        keys: vec![
+            russh::keys::PrivateKey::random(&mut OsRng, russh::keys::Algorithm::Ed25519).unwrap(),
+        ],
+        preferred: Preferred {
+            // kex: std::borrow::Cow::Owned(vec![russh::kex::DH_GEX_SHA256]),
+            ..Preferred::default()
+        },
         ..Default::default()
     };
     let config = Arc::new(config);
     let mut sh = Server {
-        clients: Arc::new(Mutex::new(HashMap::new())),
-        id: 0,
+        counter: 0,
     };
-    sh.run_on_address(config, ("0.0.0.0", 2222)).await.unwrap();
+
+    let socket = TcpListener::bind(("0.0.0.0", 2222)).await.unwrap();
+    let server = sh.run_on_socket(config, &socket);
+
+    server.await.unwrap()
 }
 
 #[derive(Clone)]
 struct Server {
-    clients: Arc<Mutex<HashMap<(usize, ChannelId), russh::server::Handle>>>,
-    id: usize,
+    counter: u64,
 }
 
-impl Server {
-    async fn post(&mut self, data: CryptoVec) {
-        let mut clients = self.clients.lock().await;
-        for ((id, channel), ref mut s) in clients.iter_mut() {
-            if *id != self.id {
-                let _ = s.data(*channel, data.clone()).await;
-            }
-        }
+struct Handler {
+    connection: u64,
+    peer_address: Option<std::net::SocketAddr>,
+}
+
+impl Handler {
+    fn log(&self) -> String {
+        format!("time: {}, connection: {}, address: {:?}", Utc::now(), self.connection, self.peer_address)
     }
-}
 
-impl server::Server for Server {
-    type Handler = Self;
-    fn new_client(&mut self, peer_address: Option<std::net::SocketAddr>) -> Self {
-        println!("Adress: {:?}", peer_address);
-        let s = self.clone();
-        self.id += 1;
+    fn available_methods(&self) -> MethodSet {
+        let mut s = MethodSet::empty();
+        s.push(MethodKind::Password);
+        s.push(MethodKind::PublicKey);
         s
     }
 }
 
-#[async_trait]
-impl server::Handler for Server {
-    type Error = anyhow::Error;
-
-    async fn channel_open_session(
-        &mut self,
-        channel: Channel<Msg>,
-        session: &mut Session,
-    ) -> Result<bool, Self::Error> {
-        {
-            let mut clients = self.clients.lock().await;
-            clients.insert((self.id, channel.id()), session.handle());
-        }
-        Ok(true)
+impl server::Server for Server {
+    type Handler = Handler;
+    fn new_client(&mut self, peer_address: Option<std::net::SocketAddr>) -> Self::Handler {
+        let r = Handler {
+            connection: self.counter,
+            peer_address,
+        };
+        println!("{}", r.log());
+        self.counter +=1;
+        r
     }
+}
+
+impl server::Handler for Handler {
+    type Error = anyhow::Error;
 
     async fn auth_publickey(
         &mut self,
-        _: &str,
-        _: &key::PublicKey,
+        user: &str,
+        key: &ssh_key::PublicKey,
     ) -> Result<server::Auth, Self::Error> {
-        Ok(server::Auth::Reject { proceed_with_methods: None })
+        println!("{}, user: {}, key: {}-{} [{}]",self.log(), user, key.algorithm(), key.fingerprint(HashAlg::Sha512), key.comment());
+        Ok(server::Auth::Reject { proceed_with_methods: Some(self.available_methods()), partial_success: false })
     }
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<server::Auth, Self::Error> {
-        println!("\nuser: {}, pass: {}", user, password);
-        match (user,password) {
-            ("root","root") => Ok(server::Auth::Accept),
-            _ => Ok(server::Auth::Reject { proceed_with_methods: None }),
-        }
-    }
-
-    async fn data(
-        &mut self,
-        channel: ChannelId,
-        data: &[u8],
-        session: &mut Session,
-    ) -> Result<(), Self::Error> {
-        print!("{}", String::from_utf8_lossy(&data));
-        let _ = std::io::stdout().flush();
-        let post_data = CryptoVec::from(format!("Got data: {}\r\n", String::from_utf8_lossy(&data)));
-        self.post(post_data.clone()).await;
-        let session_data = CryptoVec::from(format!("Zing: {}\r\n", String::from_utf8_lossy(&data)));
-        session.data(channel, session_data);
-        Ok(())
-    }
-
-    async fn tcpip_forward(
-        &mut self,
-        address: &str,
-        port: &mut u32,
-        session: &mut Session,
-    ) -> Result<bool, Self::Error> {
-        let handle = session.handle();
-        let address = address.to_string();
-        let port = *port;
-        tokio::spawn(async move {
-            let channel = handle
-                .channel_open_forwarded_tcpip(address, port, "1.2.3.4", 1234)
-                .await
-                .unwrap();
-            let _ = channel.data(&b"Hello from a forwarded port"[..]).await;
-            let _ = channel.eof().await;
-        });
-        Ok(true)
+        println!("{}, user: {}, pass: {}", self.log(), user, password);
+        Ok(server::Auth::Reject { proceed_with_methods: Some(self.available_methods()), partial_success: false })
     }
 }
