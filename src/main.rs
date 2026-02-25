@@ -13,9 +13,11 @@ mod log;
 #[tokio::main]
 async fn main() {
     let config = russh::server::Config {
-        inactivity_timeout: Some(std::time::Duration::from_secs(3600)),
+        inactivity_timeout: Some(std::time::Duration::from_secs(60)),
         auth_rejection_time: std::time::Duration::from_secs(3),
         auth_rejection_time_initial: Some(std::time::Duration::from_secs(0)),
+        server_id: SshId::Standard("SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u7".into()),
+        max_auth_attempts: MAX_ATTEMPTS,
         keys: vec![
             russh::keys::PrivateKey::random(&mut OsRng, russh::keys::Algorithm::Ed25519).unwrap(),
         ],
@@ -41,11 +43,11 @@ struct Server {
     counter: u64,
 }
 
-const MAX_ATTEMPTS: u64 = 5;
+const MAX_ATTEMPTS: usize = 5;
 
 struct Handler {
     connection: u64,
-    attempts: u64,
+    attempts: usize,
     peer_address: Option<std::net::SocketAddr>,
 }
 
