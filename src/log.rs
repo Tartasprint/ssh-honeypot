@@ -25,6 +25,9 @@ impl From<&PublicKey> for PublicKeyFingerprint {
 pub enum RecordKind {
     StartConnection,
     StopConnection,
+    AuthNone {
+        user: String,
+    },
     Password {
         user: String,
         password: String,

@@ -86,6 +86,13 @@ impl server::Server for Server {
 impl server::Handler for Handler {
     type Error = anyhow::Error;
 
+    async fn auth_none(&mut self, user: &str) -> Result<server::Auth, Self::Error> {
+        self.log(log::RecordKind::AuthNone{
+            user: user.into(),
+        });
+        Ok(server::Auth::Reject { proceed_with_methods: Some(self.available_methods()), partial_success: false })
+    }
+
     async fn auth_publickey(
         &mut self,
         user: &str,
