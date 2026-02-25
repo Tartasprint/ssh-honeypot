@@ -8,6 +8,8 @@ use russh::*;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
+mod log;
+
 #[tokio::main]
 async fn main() {
     let config = russh::server::Config {
@@ -45,8 +47,13 @@ struct Handler {
 }
 
 impl Handler {
-    fn log(&self) -> String {
-        format!("time: {}, connection: {}, address: {:?}", Utc::now(), self.connection, self.peer_address)
+    fn log(&self, data: log::RecordKind) {
+        (log::Record {
+            time: Utc::now(),
+            connection: self.connection,
+            peer_address: self.peer_address,
+            data,
+        }).log();
     }
 
     fn available_methods(&self) -> MethodSet {
@@ -57,6 +64,12 @@ impl Handler {
     }
 }
 
+impl Drop for Handler {
+    fn drop(&mut self){
+        self.log(log::RecordKind::StopConnection);
+    }
+}
+
 impl server::Server for Server {
     type Handler = Handler;
     fn new_client(&mut self, peer_address: Option<std::net::SocketAddr>) -> Self::Handler {
@@ -64,7 +77,7 @@ impl server::Server for Server {
             connection: self.counter,
             peer_address,
         };
-        println!("{}", r.log());
+        r.log(log::RecordKind::StartConnection);
         self.counter +=1;
         r
     }
@@ -78,12 +91,18 @@ impl server::Handler for Handler {
         user: &str,
         key: &ssh_key::PublicKey,
     ) -> Result<server::Auth, Self::Error> {
-        println!("{}, user: {}, key: {}-{} [{}]",self.log(), user, key.algorithm(), key.fingerprint(HashAlg::Sha512), key.comment());
+        self.log(log::RecordKind::PublicKey{
+            user: user.into(),
+            key: key.into(),
+        });
         Ok(server::Auth::Reject { proceed_with_methods: Some(self.available_methods()), partial_success: false })
     }
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<server::Auth, Self::Error> {
-        println!("{}, user: {}, pass: {}", self.log(), user, password);
+        self.log(log::RecordKind::Password{
+            user: user.into(),
+            password: password.into(),
+        });
         Ok(server::Auth::Reject { proceed_with_methods: Some(self.available_methods()), partial_success: false })
     }
 }
