@@ -1,8 +1,7 @@
 use chrono::prelude::{DateTime, Utc};
 use russh::keys::ssh_key::PublicKey;
 use russh::keys::HashAlg;
-use serde::{Serialize, Deserialize};
-use serde_json::Result;
+use serde::Serialize;
 
 #[derive(Serialize)]
 pub struct PublicKeyFingerprint {

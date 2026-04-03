@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
-use chrono::prelude::*;
 use russh::keys::ssh_key::rand_core::OsRng;
-use russh::keys::{Certificate, *};
-use russh::server::{Msg, Server as _, Session};
-use russh::*;
+use russh::server::Server as _;
+use russh::SshId;
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
 
-mod log;
+use ssh_honeypot::server::{
+    Server,
+    Config as HoneyConfig,
+};
+
+const MAX_ATTEMPTS: usize = 5;
 
 #[tokio::main]
 async fn main() {
@@ -19,18 +21,16 @@ async fn main() {
         server_id: SshId::Standard("SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u7".into()),
         max_auth_attempts: MAX_ATTEMPTS,
         keys: vec![
-            russh::keys::PrivateKey::random(&mut OsRng, russh::keys::Algorithm::Ed25519).unwrap(),
+            ::russh::keys::PrivateKey::random(&mut OsRng, russh::keys::Algorithm::Ed25519).unwrap(),
         ],
-        preferred: Preferred {
+        preferred: ::russh::Preferred {
             // kex: std::borrow::Cow::Owned(vec![russh::kex::DH_GEX_SHA256]),
-            ..Preferred::default()
+            ..::russh::Preferred::default()
         },
         ..Default::default()
     };
     let config = Arc::new(config);
-    let mut sh = Server {
-        counter: 0,
-    };
+    let mut sh = Server::new(HoneyConfig::default());
 
     let socket = TcpListener::bind(("0.0.0.0", 2222)).await.unwrap();
     let server = sh.run_on_socket(config, &socket);
@@ -38,95 +38,3 @@ async fn main() {
     server.await.unwrap()
 }
 
-#[derive(Clone)]
-struct Server {
-    counter: u64,
-}
-
-const MAX_ATTEMPTS: usize = 5;
-
-struct Handler {
-    connection: u64,
-    attempts: usize,
-    peer_address: Option<std::net::SocketAddr>,
-}
-
-impl Handler {
-    fn new_attempt(&mut self){
-        self.attempts += 1;
-    }
-
-    fn log(&self, data: log::RecordKind) {
-        (log::Record {
-            time: Utc::now(),
-            connection: self.connection,
-            peer_address: self.peer_address,
-            data,
-        }).log();
-    }
-
-    fn available_methods(&self) -> server::Auth {
-        if self.attempts <= MAX_ATTEMPTS {
-            let mut methods = MethodSet::empty();
-            methods.push(MethodKind::Password);
-            methods.push(MethodKind::PublicKey);
-            server::Auth::Reject { proceed_with_methods: Some(methods), partial_success: false }
-        } else {
-            server::Auth::Reject { proceed_with_methods: None, partial_success: false }
-        }
-    }
-}
-
-impl Drop for Handler {
-    fn drop(&mut self){
-        self.log(log::RecordKind::StopConnection);
-    }
-}
-
-impl server::Server for Server {
-    type Handler = Handler;
-    fn new_client(&mut self, peer_address: Option<std::net::SocketAddr>) -> Self::Handler {
-        let r = Handler {
-            connection: self.counter,
-            attempts: 0,
-            peer_address,
-        };
-        r.log(log::RecordKind::StartConnection);
-        self.counter +=1;
-        r
-    }
-}
-
-impl server::Handler for Handler {
-    type Error = anyhow::Error;
-
-    async fn auth_none(&mut self, user: &str) -> Result<server::Auth, Self::Error> {
-        self.new_attempt();
-        self.log(log::RecordKind::AuthNone{
-            user: user.into(),
-        });
-        Ok(self.available_methods())
-    }
-
-    async fn auth_publickey(
-        &mut self,
-        user: &str,
-        key: &ssh_key::PublicKey,
-    ) -> Result<server::Auth, Self::Error> {
-        self.new_attempt();
-        self.log(log::RecordKind::PublicKey{
-            user: user.into(),
-            key: key.into(),
-        });
-        Ok(self.available_methods())
-    }
-
-    async fn auth_password(&mut self, user: &str, password: &str) -> Result<server::Auth, Self::Error> {
-        self.new_attempt();
-        self.log(log::RecordKind::Password{
-            user: user.into(),
-            password: password.into(),
-        });
-        Ok(self.available_methods())
-    }
-}
