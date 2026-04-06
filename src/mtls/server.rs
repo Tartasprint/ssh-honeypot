@@ -1,14 +1,15 @@
 use std::io;
 use std::net::SocketAddr;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls::server::WebPkiClientVerifier;
+use rustls::server::{ClientHello, WebPkiClientVerifier};
+use rustls::{RootCertStore, ServerConfig};
+use rustls_tokio_stream::{ServerConfigProvider, TlsStream};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_rustls::rustls::{RootCertStore, ServerConfig};
-use tokio_rustls::{server::TlsStream, TlsAcceptor};
 
 fn load_certs(filename: &Path) -> Vec<CertificateDer<'static>> {
     CertificateDer::pem_file_iter(filename)
@@ -48,15 +49,13 @@ pub trait MtlsServer {
 
     fn run() -> impl std::future::Future<Output = io::Result<()>> + Send {
         async {
-            let config = get_config();
-            let acceptor = TlsAcceptor::from(Arc::new(config));
             let listener = TcpListener::bind("127.0.0.1:8888").await.unwrap();
             loop {
                 let (stream, peer_addr) = listener.accept().await?;
-                let acceptor: TlsAcceptor = acceptor.clone();
+                let config = Arc::new(get_config());
 
                 let fut = async move {
-                    let stream = acceptor.accept(stream).await?;
+                    let stream = TlsStream::new_server_side(stream, config, None);
                     Self::handle_connection(peer_addr, stream).await
                 };
 
