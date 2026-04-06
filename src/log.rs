@@ -1,9 +1,9 @@
 use chrono::prelude::{DateTime, Utc};
 use russh::keys::ssh_key::PublicKey;
 use russh::keys::HashAlg;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
 pub struct PublicKeyFingerprint {
     fingerprint: String,
     algorithm: String,
@@ -20,7 +20,7 @@ impl From<&PublicKey> for PublicKeyFingerprint {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub enum RecordKind {
     StartConnection,
     StopConnection,
@@ -37,7 +37,7 @@ pub enum RecordKind {
     },
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Record {
     pub connection: u64,
     pub peer_address: Option<std::net::SocketAddr>,

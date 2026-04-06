@@ -3,22 +3,50 @@ use std::time::Duration;
 
 use chrono::Utc;
 use pollster::FutureExt as _;
+use russh::keys::ssh_key::rand_core::OsRng;
+use russh::SshId;
+use serde::Deserialize;
 
 use crate::log;
 use crate::ratelimit::RateLimiter;
 
-
-
+#[derive(Deserialize)]
 pub struct Config {
     pub max_attempts: usize,
     pub rate_limit: Duration,
+    pub banner: String,
+    pub bind_broadcast: bool,
+}
+
+impl Config {
+    pub fn get_russh_config(&self) -> russh::server::Config {
+        russh::server::Config {
+            inactivity_timeout: Some(std::time::Duration::from_secs(60)),
+            auth_rejection_time: std::time::Duration::from_secs(3),
+            auth_rejection_time_initial: Some(std::time::Duration::from_secs(0)),
+            server_id: SshId::Standard(self.banner.clone()),
+            max_auth_attempts: self.max_attempts,
+            keys: vec![::russh::keys::PrivateKey::random(
+                &mut OsRng,
+                russh::keys::Algorithm::Ed25519,
+            )
+            .unwrap()],
+            preferred: ::russh::Preferred {
+                // kex: std::borrow::Cow::Owned(vec![russh::kex::DH_GEX_SHA256]),
+                ..::russh::Preferred::default()
+            },
+            ..Default::default()
+        }
+    }
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             max_attempts: 5,
-            rate_limit: Duration::new(60, 0),
+            rate_limit: Duration::new(600, 1),
+            banner: "SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u7".into(),
+            bind_broadcast: false,
         }
     }
 }
@@ -47,7 +75,7 @@ pub struct Handler {
 }
 
 impl Handler {
-    fn new_attempt(&mut self){
+    fn new_attempt(&mut self) {
         self.attempts += 1;
     }
 
@@ -57,24 +85,31 @@ impl Handler {
             connection: self.connection,
             peer_address: self.peer_address,
             data,
-        }).log();
+        })
+        .log();
     }
 
     fn available_methods(&self) -> ::russh::server::Auth {
-        use russh::{ MethodKind, MethodSet };
+        use russh::{MethodKind, MethodSet};
         if self.attempts <= self.server_config.max_attempts {
             let mut methods = MethodSet::empty();
             methods.push(MethodKind::Password);
             methods.push(MethodKind::PublicKey);
-            ::russh::server::Auth::Reject { proceed_with_methods: Some(methods), partial_success: false }
+            ::russh::server::Auth::Reject {
+                proceed_with_methods: Some(methods),
+                partial_success: false,
+            }
         } else {
-            ::russh::server::Auth::Reject { proceed_with_methods: None, partial_success: false }
+            ::russh::server::Auth::Reject {
+                proceed_with_methods: None,
+                partial_success: false,
+            }
         }
     }
 }
 
 impl Drop for Handler {
-    fn drop(&mut self){
+    fn drop(&mut self) {
         self.log(log::RecordKind::StopConnection);
     }
 }
@@ -89,13 +124,16 @@ impl ::russh::server::Server for Server {
             server_config: self.config.clone(),
         };
         if let Some(sock_addr) = peer_address {
-            let check = self.rate_limiter.check(sock_addr.ip(), self.config.rate_limit).block_on();
+            let check = self
+                .rate_limiter
+                .check(sock_addr.ip(), self.config.rate_limit)
+                .block_on();
             if !check {
-                println!("Rate exceeded");
+                eprintln!("Rate exceeded");
             }
         }
         r.log(log::RecordKind::StartConnection);
-        self.counter +=1;
+        self.counter += 1;
         r
     }
 }
@@ -105,9 +143,7 @@ impl ::russh::server::Handler for Handler {
 
     async fn auth_none(&mut self, user: &str) -> Result<::russh::server::Auth, Self::Error> {
         self.new_attempt();
-        self.log(log::RecordKind::AuthNone{
-            user: user.into(),
-        });
+        self.log(log::RecordKind::AuthNone { user: user.into() });
         Ok(self.available_methods())
     }
 
@@ -117,16 +153,20 @@ impl ::russh::server::Handler for Handler {
         key: &russh::keys::ssh_key::PublicKey,
     ) -> Result<::russh::server::Auth, Self::Error> {
         self.new_attempt();
-        self.log(log::RecordKind::PublicKey{
+        self.log(log::RecordKind::PublicKey {
             user: user.into(),
             key: key.into(),
         });
         Ok(self.available_methods())
     }
 
-    async fn auth_password(&mut self, user: &str, password: &str) -> Result<::russh::server::Auth, Self::Error> {
+    async fn auth_password(
+        &mut self,
+        user: &str,
+        password: &str,
+    ) -> Result<::russh::server::Auth, Self::Error> {
         self.new_attempt();
-        self.log(log::RecordKind::Password{
+        self.log(log::RecordKind::Password {
             user: user.into(),
             password: password.into(),
         });

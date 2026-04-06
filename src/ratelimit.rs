@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 pub struct RateLimiter {
-    cells: Arc<Mutex<HashMap<IpAddr,RateLimitState>>>,
+    cells: Arc<Mutex<HashMap<IpAddr, RateLimitState>>>,
 }
 
 impl RateLimiter {
@@ -19,22 +19,19 @@ impl RateLimiter {
     pub async fn check(&mut self, cell: IpAddr, rate: Duration) -> bool {
         let result = {
             let mut cells = self.cells.lock().await;
-            let cell: &mut RateLimitState = cells
-                .entry(cell)
-                .or_insert(RateLimitState::new());
+            let cell: &mut RateLimitState = cells.entry(cell).or_insert(RateLimitState::new());
             cell.check(rate)
         };
         self.collect_garbage(rate).await;
         result
     }
 
-    async fn collect_garbage(&mut self, age: Duration){
+    async fn collect_garbage(&mut self, age: Duration) {
         let mut cells = self.cells.lock().await;
         let deadline = Instant::now() - age;
-        cells.retain(|&_ip,state| state.valid_at() > deadline);
+        cells.retain(|&_ip, state| state.valid_at() > deadline);
     }
 }
-            
 
 struct RateLimitState {
     tat: Instant,
